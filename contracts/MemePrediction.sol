@@ -15,11 +15,12 @@ contract MemePrediction is Ownable, ArraySearch {
 
     struct Predictions {
         uint256[] memeOptionIndexes;
+        uint256[] predictionUpNetAmounts;
+        uint256[] predictionDownNetAmounts;
+        uint256[] predictionAmounts;
         uint256[] predictionNetAmounts;
-        uint256[] preditionAmounts;
-        bool[] isUpPrediction;
-
         uint256 totalPredictionAmount;
+        uint256 totalPredictionNetAmount;
         uint256 feesCollected;
     }
 
@@ -29,7 +30,7 @@ contract MemePrediction is Ownable, ArraySearch {
         Cancelled
     }
 
-    mapping(uint256 => MemeOption[]) private optionStats;
+    mapping(uint256 => MemeOption[]) private roundOptionStats;
 
     State state = State.Resolved;
     uint256 public currentPredictionRound = 0;
@@ -50,6 +51,7 @@ contract MemePrediction is Ownable, ArraySearch {
     // Uses 2 decimal places so 12.34% = 1234
     uint256 public FEE_PERCENTAGE;
     uint256 public constant FEE_DECIMALS = 2;
+
     //In seconds
     uint256 public OPEN_PERIOD = 3 * 24 * 60 * 60;
     uint256 public WAITING_PERIOD = 7 * 24 * 60 * 60;
@@ -63,12 +65,12 @@ contract MemePrediction is Ownable, ArraySearch {
 
     function startNewPredictionRound() public {
         require(state == State.Resolved || state == State.Cancelled);
-        require(optionStats[currentPredictionRound].length > 0);
+        require(roundOptionStats[currentPredictionRound].length > 0);
         started_at = block.timestamp;
         open_until = block.timestamp + OPEN_PERIOD;
         waiting_until = open_until + WAITING_PERIOD;
         timeout_at = waiting_until + TIMEOUT_FOR_RESOLVING_PREDICTION;
-        _copyOptionStatsForNextRound();
+        _copyroundOptionStatsForNextRound();
         state = State.Open;
         currentPredictionRound += 1;
 
@@ -82,50 +84,47 @@ contract MemePrediction is Ownable, ArraySearch {
     ) public {
         require(state == State.Open);
         require(block.timestamp < open_until);
-        require(optionStats[currentPredictionRound].length > memeOptionIndex);
+        require(roundOptionStats[currentPredictionRound].length > memeOptionIndex);
 
-        //TODO: this is wrong user should be able to bet as manytimes he wants until he hits max bet amount
-        //      this will force us to add another variable to predictions and make refunding simpler (totalRawAmountPerPrediction)
         uint256[] memory alreadyPredictedMemes = predictions[currentPredictionRound][msg.sender].memeOptionIndexes;
-        (bool alreadyPredicted, ) = findElement(alreadyPredictedMemes, memeOptionIndex);
-
-        require(!alreadyPredicted);
+        (bool alreadyPredicted, uint256 predictionIndex) = findElement(alreadyPredictedMemes, memeOptionIndex);
 
         uint256 weiAmount = amount * (10**predictionCurrency.decimals());
-
+        uint256 currentTotalAmount = 0;
+        if (alreadyPredicted) {
+            currentTotalAmount = predictions[currentPredictionRound][msg.sender].predictionAmounts[predictionIndex];
+        }
         require(weiAmount >= MINIMUM_PREDICTION_AMOUNT);
-        require(weiAmount <= MAXIMUM_PREDICTION_AMOUNT);
+        require(weiAmount + currentTotalAmount <= MAXIMUM_PREDICTION_AMOUNT);
 
         uint256 weiFee = (weiAmount * FEE_PERCENTAGE) / 10**FEE_DECIMALS;
         uint256 weiNetAmount = weiAmount - weiFee;
 
         if (predictionCurrency.transferFrom(msg.sender, address(this), weiAmount)) {
             if (isUpPrediction) {
-                optionStats[currentPredictionRound][memeOptionIndex].totalUpAmount += weiNetAmount;
+                roundOptionStats[currentPredictionRound][memeOptionIndex].totalUpAmount += weiNetAmount;
             } else {
-                optionStats[currentPredictionRound][memeOptionIndex].totalDownAmount += weiNetAmount;
+                roundOptionStats[currentPredictionRound][memeOptionIndex].totalDownAmount += weiNetAmount;
             }
-            predictions[currentPredictionRound][msg.sender].memeOptionIndexes.push(memeOptionIndex);
-            predictions[currentPredictionRound][msg.sender].predictionNetAmounts.push(weiNetAmount);
-            predictions[currentPredictionRound][msg.sender].isUpPrediction.push(isUpPrediction);
-            predictions[currentPredictionRound][msg.sender].feesCollected += weiFee;
-            feesCollectedForRound[currentPredictionRound] += weiFee;
-            lockedCurrency += weiFee;
-            lockedCurrency += weiNetAmount;
+
+            if (alreadyPredicted) {
+                _addToExistingPrediction(predictionIndex, weiAmount, weiNetAmount, weiFee, isUpPrediction);
+            } else {
+                _addNewPrediction(memeOptionIndex, weiAmount, weiNetAmount, weiFee, isUpPrediction);
+            }
 
             uint256[] memory unclaimedRounds = unclaimedPredictionRounds[msg.sender];
             (bool alreadyMarked, ) = findElement(unclaimedRounds, currentPredictionRound);
             if (!alreadyMarked) {
                 unclaimedPredictionRounds[msg.sender].push(currentPredictionRound);
             }
-
             //TODO: Emit
         }
     }
 
     // True means up outcome won
     function resolve(bool[] calldata _predictionOutcomes) public {
-        require(_predictionOutcomes.length == optionStats[currentPredictionRound].length);
+        require(_predictionOutcomes.length == roundOptionStats[currentPredictionRound].length);
         require(block.timestamp > waiting_until);
         //TODO: When implementing bonus, check for sufficient aviable funds
 
@@ -140,17 +139,16 @@ contract MemePrediction is Ownable, ArraySearch {
         uint256[] memory unclaimedRounds = unclaimedPredictionRounds[msg.sender];
         for (uint256 i = 0; i < unclaimedRounds.length; i++) {
             uint256 unclaimedRound = unclaimedRounds[i];
-
             if (unclaimedRound == currentPredictionRound && state == State.Open) {
                 continue;
             }
 
+            Predictions memory roundPredictions = predictions[unclaimedRound][msg.sender];
             if (roundResults[unclaimedRound].length == 0) {
                 uint256 cancelledAmount = _calculateRefundForCancelledRound(unclaimedRound);
                 claimedAmount += cancelledAmount;
                 lockedCurrency -= cancelledAmount;
             } else {
-                Predictions memory roundPredictions = predictions[unclaimedRound][msg.sender];
                 uint256 wonAmount = _calculateRewardForRound(unclaimedRound);
                 claimedAmount += wonAmount;
                 lockedCurrency -= wonAmount;
@@ -172,24 +170,68 @@ contract MemePrediction is Ownable, ArraySearch {
     }
 
     function getCurrentOdds(uint256 index) public view returns (uint256 totalUpAmount, uint256 totalDownAmount) {
-        require(index < optionStats[currentPredictionRound].length);
-        totalUpAmount = optionStats[currentPredictionRound][index].totalUpAmount / (10**predictionCurrency.decimals());
-        totalDownAmount = optionStats[currentPredictionRound][index].totalDownAmount / (10**predictionCurrency.decimals());
+        require(index < roundOptionStats[currentPredictionRound].length);
+        totalUpAmount = roundOptionStats[currentPredictionRound][index].totalUpAmount / (10**predictionCurrency.decimals());
+        totalDownAmount = roundOptionStats[currentPredictionRound][index].totalDownAmount / (10**predictionCurrency.decimals());
     }
 
     function getAvailableCurrency() public view returns (uint256) {
         return predictionCurrency.balanceOf(address(this));
     }
 
-    function withdraw(uint256 optionIndex) public {}
+    // NOTE: Keeps the fee
+    function withdraw(uint256 optionIndex) public returns (uint256) {
+        require(state == State.Open);
 
-    function withdrawAll() public returns (uint256 currentKeyContract) {}
+        uint256[] memory alreadyPredictedMemes = predictions[currentPredictionRound][msg.sender].memeOptionIndexes;
+        (bool predicted, uint256 predictionIndex) = findElement(alreadyPredictedMemes, optionIndex);
+        require(predicted);
+
+        Predictions storage userPredictions = predictions[currentPredictionRound][msg.sender];
+        uint256 amountToWithdraw = userPredictions.predictionNetAmounts[predictionIndex];
+
+        if (predictionCurrency.transferFrom(address(this), msg.sender, amountToWithdraw)) {
+            uint256 upNetAmount = userPredictions.predictionUpNetAmounts[predictionIndex];
+            uint256 downNetAmount = userPredictions.predictionDownNetAmounts[predictionIndex];
+
+            _storeWithdrawal(predictionIndex, optionIndex);
+
+            userPredictions.totalPredictionAmount -= amountToWithdraw;
+            userPredictions.totalPredictionNetAmount -= amountToWithdraw;
+            lockedCurrency -= amountToWithdraw;
+
+            return amountToWithdraw;
+        }
+
+        revert("Withdrawal failed");
+    }
+
+    function withdrawAll() public returns (uint256) {
+        require(state == State.Open);
+
+        Predictions storage userPredictions = predictions[currentPredictionRound][msg.sender];
+        uint256 amountToWithdraw = userPredictions.totalPredictionNetAmount;
+
+        if (predictionCurrency.transferFrom(address(this), msg.sender, amountToWithdraw)) {
+            for (uint256 i = 0; i < userPredictions.memeOptionIndexes.length; i++) {
+                _storeWithdrawal(i, userPredictions.memeOptionIndexes[i]);
+            }
+
+            userPredictions.totalPredictionAmount = 0;
+            userPredictions.totalPredictionNetAmount = 0;
+            lockedCurrency -= amountToWithdraw;
+
+            return amountToWithdraw;
+        }
+
+        revert("Withdrawal failed");
+    }
 
     function setCurrentPredictibleOptions(string[] calldata memeIdentifiers) public onlyOwner {
         require(state == State.Resolved || state == State.Cancelled);
-        delete optionStats[currentPredictionRound];
+        delete roundOptionStats[currentPredictionRound];
         for (uint256 i = 0; i < memeIdentifiers.length; i++) {
-            optionStats[currentPredictionRound].push(MemeOption(memeIdentifiers[i], 0, 0));
+            roundOptionStats[currentPredictionRound].push(MemeOption(memeIdentifiers[i], 0, 0));
         }
     }
 
@@ -223,53 +265,107 @@ contract MemePrediction is Ownable, ArraySearch {
     }
 
     function getCurrentPredictibleOptions() public view returns (MemeOption[] memory) {
-        return optionStats[currentPredictionRound];
+        return roundOptionStats[currentPredictionRound];
     }
 
     function getCurrentPredictions() public view returns (Predictions memory) {
         return predictions[currentPredictionRound][msg.sender];
     }
 
-    function _copyOptionStatsForNextRound() private {
-        for (uint256 i = 0; i < optionStats[currentPredictionRound].length; i++) {
-            string memory memeIdentifier = optionStats[currentPredictionRound][i].identifier;
-            optionStats[currentPredictionRound + 1][i] = MemeOption(memeIdentifier, 0, 0);
+    function _copyroundOptionStatsForNextRound() private {
+        for (uint256 i = 0; i < roundOptionStats[currentPredictionRound].length; i++) {
+            string memory memeIdentifier = roundOptionStats[currentPredictionRound][i].identifier;
+            roundOptionStats[currentPredictionRound + 1][i] = MemeOption(memeIdentifier, 0, 0);
         }
     }
 
     function _calculateRefundForCancelledRound(uint256 round) private view returns (uint256 amount) {
         amount = 0;
         Predictions memory roundPredictions = predictions[round][msg.sender];
-        for (uint256 i = 0; i < roundPredictions.predictionNetAmounts.length; i++) {
-            amount += roundPredictions.predictionNetAmounts[i];
+        for (uint256 i = 0; i < roundPredictions.predictionAmounts.length; i++) {
+            amount += roundPredictions.predictionAmounts[i];
         }
-        amount += roundPredictions.feesCollected;
     }
 
     function _calculateRewardForRound(uint256 round) private view returns (uint256 amount) {
         amount = 0;
         Predictions memory roundPredictions = predictions[round][msg.sender];
-        for (uint256 i = 0; i < roundPredictions.predictionNetAmounts.length; i++) {
+        for (uint256 i = 0; i < roundPredictions.memeOptionIndexes.length; i++) {
             uint256 memeIndex = roundPredictions.memeOptionIndexes[i];
 
-            bool isUpPrediction = roundPredictions.isUpPrediction[i];
             bool upIsCorrect = roundResults[round][memeIndex];
-            if (upIsCorrect == isUpPrediction) {
-                uint256 totalWinningAmount;
-                uint256 totalLosingAmount;
-                if (upIsCorrect == true) {
-                    totalWinningAmount = optionStats[round][memeIndex].totalUpAmount;
-                    totalLosingAmount = optionStats[round][memeIndex].totalDownAmount;
-                } else {
-                    totalWinningAmount = optionStats[round][memeIndex].totalDownAmount;
-                    totalLosingAmount = optionStats[round][memeIndex].totalUpAmount;
-                }
-
-                uint256 totalPredictionAmount = totalWinningAmount + totalLosingAmount;
-                uint256 predictionAmount = roundPredictions.predictionNetAmounts[i];
-                amount += (predictionAmount * totalPredictionAmount) / totalWinningAmount;
+            uint256 totalWinningAmount;
+            uint256 totalLosingAmount;
+            uint256 predictionAmount;
+            if (upIsCorrect) {
+                totalWinningAmount = roundOptionStats[round][memeIndex].totalUpAmount;
+                totalLosingAmount = roundOptionStats[round][memeIndex].totalDownAmount;
+                predictionAmount = roundPredictions.predictionUpNetAmounts[i];
+            } else {
+                totalWinningAmount = roundOptionStats[round][memeIndex].totalDownAmount;
+                totalLosingAmount = roundOptionStats[round][memeIndex].totalUpAmount;
+                predictionAmount = roundPredictions.predictionDownNetAmounts[i];
             }
+            uint256 totalPredictionAmount = totalWinningAmount + totalLosingAmount;
+            amount += (predictionAmount * totalPredictionAmount) / totalWinningAmount;
         }
-        amount += roundPredictions.feesCollected;
+    }
+
+    function _addNewPrediction(
+        uint256 memeOptionIndex,
+        uint256 weiAmount,
+        uint256 weiNetAmount,
+        uint256 weiFee,
+        bool isUpPrediction
+    ) private {
+        predictions[currentPredictionRound][msg.sender].memeOptionIndexes.push(memeOptionIndex);
+
+        if (isUpPrediction) {
+            predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts.push(weiNetAmount);
+        } else {
+            predictions[currentPredictionRound][msg.sender].predictionDownNetAmounts.push(weiNetAmount);
+        }
+        predictions[currentPredictionRound][msg.sender].predictionNetAmounts.push(weiNetAmount);
+        predictions[currentPredictionRound][msg.sender].predictionAmounts.push(weiAmount);
+
+        predictions[currentPredictionRound][msg.sender].feesCollected += weiFee;
+        feesCollectedForRound[currentPredictionRound] += weiFee;
+        lockedCurrency += weiFee;
+        lockedCurrency += weiNetAmount;
+    }
+
+    function _addToExistingPrediction(
+        uint256 index,
+        uint256 weiAmount,
+        uint256 weiNetAmount,
+        uint256 weiFee,
+        bool isUpPrediction
+    ) private {
+        if (isUpPrediction) {
+            predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts[index] += weiNetAmount;
+        } else {
+            predictions[currentPredictionRound][msg.sender].predictionDownNetAmounts[index] += weiNetAmount;
+        }
+        predictions[currentPredictionRound][msg.sender].predictionNetAmounts[index] += weiNetAmount;
+        predictions[currentPredictionRound][msg.sender].predictionAmounts[index] += weiAmount;
+
+        predictions[currentPredictionRound][msg.sender].feesCollected += weiFee;
+        feesCollectedForRound[currentPredictionRound] += weiFee;
+        lockedCurrency += weiFee;
+        lockedCurrency += weiNetAmount;
+    }
+
+    function _storeWithdrawal(uint256 predictionIndex, uint256 optionIndex) private {
+        Predictions storage userPredictions = predictions[currentPredictionRound][msg.sender];
+        uint256 upNetAmount = userPredictions.predictionUpNetAmounts[predictionIndex];
+        uint256 downNetAmount = userPredictions.predictionDownNetAmounts[predictionIndex];
+
+        roundOptionStats[currentPredictionRound][optionIndex].totalUpAmount -= upNetAmount;
+        roundOptionStats[currentPredictionRound][optionIndex].totalDownAmount -= downNetAmount;
+
+        userPredictions.predictionNetAmounts[predictionIndex] = 0;
+        userPredictions.predictionUpNetAmounts[predictionIndex] = 0;
+        userPredictions.predictionDownNetAmounts[predictionIndex] = 0;
+        userPredictions.predictionAmounts[predictionIndex] = 0;
     }
 }
