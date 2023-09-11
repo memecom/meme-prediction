@@ -6,7 +6,11 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import "contracts/ArraySearch.sol";
 
+
+
+
 contract MemePrediction is Ownable, ArraySearch {
+    event DebugUint256(uint256 value);
     struct MemeOption {
         string identifier;
         uint256 totalUpAmount;
@@ -32,7 +36,7 @@ contract MemePrediction is Ownable, ArraySearch {
 
     mapping(uint256 => MemeOption[]) private roundOptionStats;
 
-    State state = State.Resolved;
+    State public state = State.Resolved;
     uint256 public currentPredictionRound = 0;
     uint256 public lockedCurrency;
 
@@ -64,8 +68,8 @@ contract MemePrediction is Ownable, ArraySearch {
     uint256 public timeout_at;
 
     function startNewPredictionRound() public {
-        require(state == State.Resolved || state == State.Cancelled);
-        require(roundOptionStats[currentPredictionRound].length > 0);
+        require(state == State.Resolved || state == State.Cancelled, "ERROR: Cannot start new prediction round until last one is resolved or cancelled");
+        require(roundOptionStats[currentPredictionRound].length > 0, "ERRPR: There needs to be atleast one prediction option");
         started_at = block.timestamp;
         open_until = block.timestamp + OPEN_PERIOD;
         waiting_until = open_until + WAITING_PERIOD;
@@ -228,9 +232,9 @@ contract MemePrediction is Ownable, ArraySearch {
     }
 
     function setCurrentPredictibleOptions(string[] calldata memeIdentifiers) public onlyOwner {
-        require(state == State.Resolved || state == State.Cancelled);
         delete roundOptionStats[currentPredictionRound];
         for (uint256 i = 0; i < memeIdentifiers.length; i++) {
+            emit DebugUint256(i);
             roundOptionStats[currentPredictionRound].push(MemeOption(memeIdentifiers[i], 0, 0));
         }
     }
@@ -275,7 +279,7 @@ contract MemePrediction is Ownable, ArraySearch {
     function _copyroundOptionStatsForNextRound() private {
         for (uint256 i = 0; i < roundOptionStats[currentPredictionRound].length; i++) {
             string memory memeIdentifier = roundOptionStats[currentPredictionRound][i].identifier;
-            roundOptionStats[currentPredictionRound + 1][i] = MemeOption(memeIdentifier, 0, 0);
+            roundOptionStats[currentPredictionRound + 1].push(MemeOption(memeIdentifier, 0, 0));
         }
     }
 
