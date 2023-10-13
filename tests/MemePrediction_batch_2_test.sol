@@ -12,7 +12,7 @@ import "remix_accounts.sol";
 import "../contracts/MemePrediction.sol";
 import "../testContracts/TestMemePrediction.sol";
 import "../testContracts/CustomAssert.sol";
-import "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
+import "@openzeppelin/contracts@4.5.0/token/ERC20/presets/ERC20PresetMinterPauser.sol";
 import "testContracts/PredictorWrapper.sol";
 
 
@@ -30,8 +30,9 @@ contract testSuite {
     /// 'beforeAll' runs before all other tests
     /// More special functions are: 'beforeEach', 'beforeAll', 'afterEach' & 'afterAll'
     function beforeEach() public {
-        predictionContract = new TestMemePrediction();
         currency = new ERC20PresetMinterPauser("MEMECOIN", "MEM");
+        predictionContract = new TestMemePrediction(address(currency));
+
         predictor_1 = new PredictorWrapper();
         predictor_2 = new PredictorWrapper();
         predictor_3 = new PredictorWrapper();
@@ -50,18 +51,16 @@ contract testSuite {
         string[] memory predictibleOptions = new string[](2);
         predictibleOptions[0] = "MEME";
         predictibleOptions[1] = "CHAD";
-        predictionContract.setCurrentPredictibleOptions(predictibleOptions);
+        predictionContract.setPredictibleOptionsForNextRound(predictibleOptions);
         predictionContract.setFeePercentage(1000);
         predictionContract.setOpenPeriod(1);
         predictionContract.setWaitingPeriod(1);
         predictionContract.setTimoutLimit(1);
 
-        predictionContract.setPredictionCurrency(address(currency));
-
         predictionContract.setMinimumPredictionAmount(10);
         predictionContract.setMaximumPredictionAmount(100);
 
-        //Initializin prediction round
+        //Initializing prediction round
         predictionContract.startNewPredictionRound();
 
         predictionContract.setOpenState(true);

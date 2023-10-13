@@ -11,7 +11,6 @@ import "remix_tests.sol";
 import "remix_accounts.sol";
 import "../contracts/MemePrediction.sol";
 import "../testContracts/TestMemePrediction.sol";
-import "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
 import "testContracts/PredictorWrapper.sol";
 
 
@@ -29,8 +28,9 @@ contract testSuite {
     /// 'beforeAll' runs before all other tests
     /// More special functions are: 'beforeEach', 'beforeAll', 'afterEach' & 'afterAll'
     function beforeEach() public {
-        predictionContract = new TestMemePrediction();
         currency = new ERC20PresetMinterPauser("MEMECOIN", "MEM");
+        predictionContract = new TestMemePrediction(address(currency));
+
         predictor_1 = new PredictorWrapper();
         predictor_2 = new PredictorWrapper();
         predictor_3 = new PredictorWrapper();
@@ -49,18 +49,17 @@ contract testSuite {
         string[] memory predictibleOptions = new string[](2);
         predictibleOptions[0] = "MEME";
         predictibleOptions[1] = "CHAD";
-        predictionContract.setCurrentPredictibleOptions(predictibleOptions);
+        predictionContract.setPredictibleOptionsForNextRound(predictibleOptions);
         predictionContract.setFeePercentage(1000);
         predictionContract.setOpenPeriod(1);
         predictionContract.setWaitingPeriod(1);
         predictionContract.setTimoutLimit(1);
 
-        predictionContract.setPredictionCurrency(address(currency));
 
         predictionContract.setMinimumPredictionAmount(10);
         predictionContract.setMaximumPredictionAmount(100);
 
-        //Initializin prediction round
+        //Initializing prediction round
         predictionContract.startNewPredictionRound();
 
         predictionContract.setOpenState(true);
@@ -72,7 +71,7 @@ contract testSuite {
         predictor_1.predict(predictionContract, 0, 100, true);
         predictor_1.predict(predictionContract, 1, 100, true);
 
-        uint256 amout = predictor_1.withdraw(predictionContract, 0);
+        uint256 amout = predictor_1.cancelPrediction(predictionContract, 0);
 
         Assert.equal(currency.balanceOf(address(predictor_1)), 890 * 10 ** currency.decimals(), "Should lose only fee");
         Assert.equal(currency.balanceOf(address(predictionContract)), 110 * 10 ** currency.decimals(), "Should own fee currency and other prediction amount");
@@ -84,7 +83,7 @@ contract testSuite {
         predictor_1.predict(predictionContract, 0, 100, true);
         predictor_1.predict(predictionContract, 1, 100, true);
 
-        uint256 amout = predictor_1.withdrawAll(predictionContract);
+        uint256 amout = predictor_1.cancelAllPredictions(predictionContract);
 
         Assert.equal(currency.balanceOf(address(predictor_1)), 980 * 10 ** currency.decimals(), "Should lose only fee");
         Assert.equal(currency.balanceOf(address(predictionContract)), 20 * 10 ** currency.decimals(), "Should own fee currency");
@@ -97,7 +96,7 @@ contract testSuite {
         predictor_1.predict(predictionContract, 0, 50, false);
         predictor_1.predict(predictionContract, 1, 100, false);
 
-        predictionContract.cancel();
+        predictionContract.cancelPredictionRound();
         predictionContract.setOpenState(false);
 
         uint256 amout = predictor_1.claim(predictionContract);
@@ -110,9 +109,9 @@ contract testSuite {
 
     function checkWithdrawAndThenCancelledClaimThenFeesGetRefunded() public {
         predictor_1.predict(predictionContract, 0, 100, false);
-        predictor_1.withdrawAll(predictionContract);
+        predictor_1.cancelAllPredictions(predictionContract);
 
-        predictionContract.cancel();
+        predictionContract.cancelPredictionRound();
         predictionContract.setOpenState(false);
 
         uint256 amout = predictor_1.claim(predictionContract);
@@ -129,7 +128,7 @@ contract testSuite {
         predictor_3.predict(predictionContract, 1, 100, false);
         predictor_4.predict(predictionContract, 1, 100, false);
 
-        predictor_4.withdrawAll(predictionContract);
+        predictor_4.cancelAllPredictions(predictionContract);
         
         predictionContract.setWaitingPeriodOverState(true);
 
@@ -139,9 +138,8 @@ contract testSuite {
 
         predictionContract.resolve(outcomes);
 
-        Assert.equal(predictionContract.lockedCurrency(), 270 * 10 ** currency.decimals(), "There should be 180 locked");
+        Assert.equal(predictionContract.lockedCurrency(), 270 * 10 ** currency.decimals(), "There should be 270 locked");
 
-        // None bets
         predictionContract.startNewPredictionRound();
 
         predictionContract.setOpenState(true);

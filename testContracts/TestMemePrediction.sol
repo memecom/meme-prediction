@@ -9,6 +9,8 @@ contract TestMemePrediction is MemePrediction {
     bool public isWaitingPeriodOverState; 
     bool public isTimedOutState; 
 
+    constructor(address currencyAddress) MemePrediction(currencyAddress) {}
+
     function isOpen() public view override returns(bool){
         return isOpenState;
     }
