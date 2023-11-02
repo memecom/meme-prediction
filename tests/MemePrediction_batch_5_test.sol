@@ -59,6 +59,8 @@ contract testSuite {
         predictionContract.setMinimumPredictionAmount(10);
         predictionContract.setMaximumPredictionAmount(100);
 
+        predictionContract.setBalanceRoundBonusRewardForNextRound(100);
+
         //Initializing prediction round
         predictionContract.startNewPredictionRound();
 
@@ -76,15 +78,15 @@ contract testSuite {
         Assert.equal(predictionContract.getWaitingPeriod(), 1, "Waiting period should be 1 hour");
         Assert.equal(predictionContract.getTimoutForResolvingPrediction(), 1, "Timiout period should be 1 hour");
     
-        Assert.equal(predictionContract.open_until(), predictionContract.started_at() + 60 * 60, "Should be open till 1 hour");
-        Assert.equal(predictionContract.waiting_until(), predictionContract.started_at() + 2 * 60 * 60, "Should be waiting till 2 hours");
-        Assert.equal(predictionContract.timeout_at(), predictionContract.started_at() + 3 * 60 * 60, "Should timeout in 3 hours");
+        Assert.equal(predictionContract.openUntil(), predictionContract.startedAt() + 60 * 60, "Should be open till 1 hour");
+        Assert.equal(predictionContract.waitingUntil(), predictionContract.startedAt() + 2 * 60 * 60, "Should be waiting till 2 hours");
+        Assert.equal(predictionContract.timeoutAt(), predictionContract.startedAt() + 3 * 60 * 60, "Should timeout in 3 hours");
     
         Assert.equal(predictionContract.getCurrentPredictibleOptions().length, 2, "Should have 2 predictible options");
     }
 
     function checkMultiRoundPredictionsWithBonusEnabled() public {
-        predictionContract.setCurrentRoundMinimumPredictionReward(150);
+        
         predictor_1.predict(predictionContract, 0, 100, true);
         predictor_2.predict(predictionContract, 0, 100, false);
         predictor_3.predict(predictionContract, 1, 100, false);
@@ -100,7 +102,7 @@ contract testSuite {
         predictionContract.setOpenState(false);
 
         Assert.equal(predictionContract.lockedCurrency(), 180 * 10 ** currency.decimals(), "There should be 180 locked");
-        Assert.equal(predictionContract.availableFounds(), 220 * 10 ** currency.decimals(), "There should be 220 available");
+        Assert.equal(predictionContract.availableFunds(), 220 * 10 ** currency.decimals(), "There should be 220 available");
         
         
         uint256 reward_1 = predictor_1.claim(predictionContract);
@@ -108,7 +110,7 @@ contract testSuite {
         Assert.equal(reward_1, 180 * 10 ** currency.decimals(), "Reward should be 180");
         Assert.equal(currency.balanceOf(address(predictor_1)), 1080 * 10 ** currency.decimals(), "Should own 1080 from reward");
         Assert.equal(currency.balanceOf(address(predictionContract)), 220 * 10 ** currency.decimals(), "Should own 220 from fees and loosing side");
-        Assert.equal(predictionContract.availableFounds(), 220 * 10 ** currency.decimals(), "There should be no locked currency so it should have access to all funds");
+        Assert.equal(predictionContract.availableFunds(), 220 * 10 ** currency.decimals(), "There should be no locked currency so it should have access to all funds");
         Assert.equal(predictionContract.lockedCurrency(), 0, "There should be no locked currency");
 
         predictionContract.startNewPredictionRound();
@@ -131,20 +133,22 @@ contract testSuite {
 
         predictionContract.setOpenState(false);
 
-        Assert.equal(predictionContract.availableFounds(), 213 * 10 ** currency.decimals(), "There should be 213 available");
-        Assert.equal(predictionContract.lockedCurrency(), 27 * 10 ** currency.decimals(), "There should be 27 locked");
+        Assert.equal(predictionContract.lockedCurrency(), 36 * 10 ** currency.decimals(), "There should be 36 locked");
+        Assert.equal(predictionContract.availableFunds(), 204 * 10 ** currency.decimals(), "There should be 204 available");
+        
 
         predictor_1.claim(predictionContract);
         predictor_2.claim(predictionContract);
 
         Assert.equal(predictionContract.lockedCurrency(), 0, "There should be no locked currency");
-        Assert.equal(predictionContract.availableFounds(), 213 * 10 ** currency.decimals(), "There should be 213 available");
-
+        Assert.equal(predictionContract.availableFunds(), 204 * 10 ** currency.decimals(), "There should be 204 available");
+        
+        predictionContract.setBalanceRoundBonusRewardForNextRound(8);
+        
         predictionContract.startNewPredictionRound();
 
         predictionContract.setOpenState(true);
 
-        predictionContract.setCurrentRoundMinimumPredictionReward(250);
 
         predictor_1.predict(predictionContract, 0, 10, true);
         predictor_2.predict(predictionContract, 0, 10, true);
@@ -153,17 +157,17 @@ contract testSuite {
 
         predictionContract.setOpenState(false);
 
-        Assert.equal(predictionContract.availableFounds(), 188 * 10 ** currency.decimals(), "There should be 168 available");
-        Assert.equal(predictionContract.lockedCurrency(), 45 * 10 ** currency.decimals(), "There should be 45 locked");
+        Assert.equal(predictionContract.availableFunds(), 198 * 10 ** currency.decimals(), "There should be 198 available");
+        Assert.equal(predictionContract.lockedCurrency(), 26 * 10 ** currency.decimals(), "There should be 26 locked");
 
         predictor_1.claim(predictionContract);
         predictor_2.claim(predictionContract);
 
         Assert.equal(predictionContract.lockedCurrency(), 0, "There should be no locked currency");
-        Assert.equal(predictionContract.availableFounds(), 188 * 10 ** currency.decimals(), "There should be 168 available");
+        Assert.equal(predictionContract.availableFunds(), 198 * 10 ** currency.decimals(), "There should be 198 available");
 
-        Assert.equal(currency.balanceOf(address(predictor_1)), 1096 * 10 ** currency.decimals(), "Should own 1098 from reward");
-        Assert.equal(currency.balanceOf(address(predictor_2)), 916 * 10 ** currency.decimals(), "Should own 1098 from reward");
+        Assert.equal(currency.balanceOf(address(predictor_1)), 1091 * 10 ** currency.decimals(), "Should own 1091 from reward");
+        Assert.equal(currency.balanceOf(address(predictor_2)), 911 * 10 ** currency.decimals(), "Should own 911 from reward");
     }
 
 }

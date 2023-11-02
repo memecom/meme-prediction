@@ -7,11 +7,11 @@ import "@openzeppelin/contracts@4.5.0/token/ERC20/presets/ERC20PresetMinterPause
 contract PredictorWrapper{
 
     function predict(MemePrediction _contract, uint256 index, uint256 amount, bool isUpPrediction) public  {
-        _contract.A1Predict(index, amount, isUpPrediction);
+        _contract.predict(index, amount, isUpPrediction);
     }
 
     function claim(MemePrediction _contract) public returns (uint256){
-        return _contract.A2Claim();
+        return _contract.claim();
     }
 
     function cancelPrediction(MemePrediction _contract, uint256 index) public returns (uint256){

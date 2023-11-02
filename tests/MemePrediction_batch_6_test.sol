@@ -11,7 +11,6 @@ import "remix_tests.sol";
 import "remix_accounts.sol";
 import "../contracts/MemePrediction.sol";
 import "../testContracts/TestMemePrediction.sol";
-import "@openzeppelin/contracts@4.5.0/token/ERC20/presets/ERC20PresetMinterPauser.sol";
 import "testContracts/PredictorWrapper.sol";
 
 
@@ -56,9 +55,9 @@ contract testSuite {
         predictionContract.setWaitingPeriod(1);
         predictionContract.setTimoutLimit(1);
 
+
         predictionContract.setMinimumPredictionAmount(10);
         predictionContract.setMaximumPredictionAmount(100);
-        predictionContract.setBalanceRoundBonusRewardForNextRound(40);
 
         //Initializing prediction round
         predictionContract.startNewPredictionRound();
@@ -68,65 +67,11 @@ contract testSuite {
         predictionContract.setTimedOutState(false);
     }
 
-    
-    function checkCalculateCurrentRequriedFundsForGuaranteedWinningsIsCalculatedCorrectly() public {
-        predictor_1.predict(predictionContract, 0, 50, true);
-        predictor_1.predict(predictionContract, 0, 10, false);
-        predictor_1.predict(predictionContract, 1, 100, false);
-
-        bool[] memory outcomes = new bool[](2);
-        outcomes[0] = false;
-        outcomes[1] = false;
-        
-        uint256 fundsNeeded = predictionContract.calculateCurrentRequriedFundsForGuaranteedWinnings(outcomes);
-        Assert.equal(fundsNeeded, 40 * 10 ** currency.decimals(), "Funds needed should be 40");
-
-        outcomes[0] = false;
-        outcomes[1] = true;
-
-        fundsNeeded = predictionContract.calculateCurrentRequriedFundsForGuaranteedWinnings(outcomes);
-        Assert.equal(fundsNeeded, 0, "Funds needed should be 0");
-        
-        outcomes[0] = true;
-        outcomes[1] = false;
-
-        fundsNeeded = predictionContract.calculateCurrentRequriedFundsForGuaranteedWinnings(outcomes);
-        Assert.equal(fundsNeeded, 76 * 10 ** currency.decimals(), "Funds needed should be 76");
-    }
-
-    function checkhasBonusFundsForCurrentRound() public {
-        predictor_1.predict(predictionContract, 0, 50, true);
-        predictor_1.predict(predictionContract, 0, 10, false);
-        predictor_1.predict(predictionContract, 1, 100, false);
-
-        currency.mint(address(predictionContract), 45 * 10 ** currency.decimals());
-
-        bool[] memory outcomes = new bool[](2);
-        outcomes[0] = false;
-        outcomes[1] = false;
-
-        bool hasFunds = predictionContract.hasBonusFundsForCurrentRound(outcomes);
-        Assert.ok(hasFunds, "Should have enought founds");
-
-        outcomes[0] = false;
-        outcomes[1] = true;
-
-        hasFunds = predictionContract.hasBonusFundsForCurrentRound(outcomes);
-        Assert.ok(hasFunds, "Should have enought founds");
-
-        outcomes[0] = true;
-        outcomes[1] = false;
-
-        hasFunds = predictionContract.hasBonusFundsForCurrentRound(outcomes);
-        Assert.ok(!hasFunds, "Should not have enought founds");
-    }
-
-    function checkOnePredictorPredictsCorrectlyAndBonusAppliedCorrectly() public {
-        currency.mint(address(predictionContract), 50 * 10 ** currency.decimals());
-        
+    function checkTwoPredictorPredictsCorrectlyOthersNot() public {
         predictor_1.predict(predictionContract, 0, 100, true);
-        
-        Assert.equal(predictionContract.lockedCurrency(), 100 * 10 ** currency.decimals(), "100 should be locked");
+        predictor_2.predict(predictionContract, 0, 100, true);
+        predictor_3.predict(predictionContract, 0, 100, false);
+        predictor_4.predict(predictionContract, 1, 100, true);
 
         bool[] memory outcomes = new bool[](2);
         outcomes[0] = true;
@@ -138,15 +83,18 @@ contract testSuite {
 
         predictionContract.setOpenState(false);
 
-        Assert.equal(predictionContract.lockedCurrency(), 130 * 10 ** currency.decimals(), "Prediction + bonus funds should be locked");
-        
+        uint256 reward_1 = predictor_1.claim(predictionContract);
+        uint256 reward_2 = predictor_2.claim(predictionContract);
+        uint256 reward_3 = predictor_3.claim(predictionContract);
+        // predictor_4 does not claim
 
-        uint256 reward = predictor_1.claim(predictionContract);
-
-        Assert.equal(currency.balanceOf(address(predictor_1)), 1030 * 10 ** currency.decimals(), "Should own 1.5x prediction amount");
-        Assert.equal(currency.balanceOf(address(predictionContract)), (10 + 10) * 10 ** currency.decimals(), "Should own fee currency + remaining bonus funds");
+        Assert.equal(currency.balanceOf(address(predictor_1)), 1035 * 10 ** currency.decimals(), "Should gain 1.5x their (amount - fee)");
+        Assert.equal(currency.balanceOf(address(predictor_2)), 1035 * 10 ** currency.decimals(), "Should gain 1.5x their (amount - fee)");
+        Assert.equal(currency.balanceOf(address(predictor_3)), 900 * 10 ** currency.decimals(), "Should lose prediction amount");
+        Assert.equal(reward_1, 135 * 10 ** currency.decimals(), "Reward should be 135");
+        Assert.equal(reward_2, 135 * 10 ** currency.decimals(), "Reward should be 135");
         Assert.equal(predictionContract.lockedCurrency(), 0, "No currency should be locked");
-        Assert.equal(reward, 130 * 10 ** currency.decimals(), "Reward should be 135");
+        Assert.equal(reward_3, 0, "Reward should be 0");
     }
     
 }

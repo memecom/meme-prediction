@@ -10,14 +10,18 @@ import "contracts/ArraySearch.sol";
 contract MemePredictionBase is Ownable, ArraySearch {
     struct MemeOption {
         string identifier;
+        uint256 memeOptionIndex;
         uint256 totalUpAmount;
         uint256 totalDownAmount;
+        uint256 usedBonusReward;
     }
 
     struct Predictions {
         uint256[] memeOptionIndexes;
         uint256[] predictionUpNetAmounts;
         uint256[] predictionDownNetAmounts;
+        uint256[] predictionUpAmounts;
+        uint256[] predictionDownAmounts;
         uint256[] predictionAmounts;
         uint256[] predictionNetAmounts;
         uint256 totalPredictionAmount;
@@ -37,15 +41,14 @@ contract MemePredictionBase is Ownable, ArraySearch {
     uint256 public currentPredictionRound = 0;
     uint256 public lockedCurrency;
 
-    IERC20Metadata public predictionCurrency;
+    IERC20Metadata public predictionCurrency = IERC20Metadata(0x6b45aA1E9aD917FE527C07EB66f8E0F4E2b93555);
 
     mapping(uint256 => mapping(address => Predictions)) internal predictions;
     mapping(address => uint256[]) public unclaimedPredictionRounds;
     mapping(uint256 => bool[]) internal roundResults;
     mapping(uint256 => uint256) public feesCollectedForRound;
 
-    mapping(uint256 => uint256) public minimumRoundPredictionReward;
-    uint256 public ODDS_DECIMALS = 2;
+    mapping(uint256 => uint256) public balanceRoundBonusReward;
 
     uint256 public MINIMUM_PREDICTION_AMOUNT;
     uint256 public MAXIMUM_PREDICTION_AMOUNT;
@@ -60,128 +63,250 @@ contract MemePredictionBase is Ownable, ArraySearch {
     uint256 internal TIMEOUT_FOR_RESOLVING_PREDICTION = 24 * 60 * 60;
 
     //Timestamps
-    uint256 public started_at;
-    uint256 public open_until;
-    uint256 public waiting_until;
-    uint256 public timeout_at;
+    uint256 public startedAt;
+    uint256 public openUntil;
+    uint256 public waitingUntil;
+    uint256 public timeoutAt;
 
+    /**
+     * @dev Sets predictible options for next round. Cant be set while round is in progress.
+     *
+     * @param memeIdentifiers List of names (strings) of predictible options.
+     */
     function setPredictibleOptionsForNextRound(string[] calldata memeIdentifiers) public onlyOwner {
         require(state == State.Resolved || state == State.Cancelled);
         delete roundOptionStats[currentPredictionRound + 1];
         for (uint256 i = 0; i < memeIdentifiers.length; i++) {
-            roundOptionStats[currentPredictionRound + 1].push(MemeOption(memeIdentifiers[i], 0, 0));
+            roundOptionStats[currentPredictionRound + 1].push(MemeOption(memeIdentifiers[i], i, 0, 0, 0));
         }
     }
 
+    /**
+     * @dev Sets minimum prediction amount per prediction.
+     *
+     * @param amount Minimum prediction amount in whole currency.
+     */
     function setMinimumPredictionAmount(uint256 amount) public onlyOwner {
         MINIMUM_PREDICTION_AMOUNT = amount * (10**predictionCurrency.decimals());
     }
 
+    /**
+     * @dev Sets maximum prediction net amount for each prediction option.
+     *
+     * @param amount Maximum prediction amount in whole currency.
+     */
     function setMaximumPredictionAmount(uint256 amount) public onlyOwner {
         MAXIMUM_PREDICTION_AMOUNT = amount * (10**predictionCurrency.decimals());
     }
 
-    // Uses 4 decimal places so 12.34% = 0.1234 = 1234
+    /**
+     * @dev Sets fee percentage.
+     *
+     * @param percentage Fee percentage, uses 4 decimal places so 12.34% = 0.1234 = 1234
+     */
     function setFeePercentage(uint256 percentage) public {
         FEE_PERCENTAGE = percentage;
     }
 
-    //TODO MAKE THIS HOURS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    /**
+     * @dev Sets open period lenght, until open period expires, users can place predictions.
+     *
+     * @param _hours Open preriod lenghts in hours.
+     */
     function setOpenPeriod(uint256 _hours) public {
         OPEN_PERIOD = _hours * 60 * 60;
     }
 
-    //TODO MAKE THIS HOURS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    /**
+     * @dev Sets waiting period lenght, this period starts after open period expires,
+     *           after that no action can be made (except owner canceling the prediction).
+     *
+     * @param _hours Waiting preriod lenghts in hours.
+     */
     function setWaitingPeriod(uint256 _hours) public {
         WAITING_PERIOD = _hours * 60 * 60;
     }
 
-    //TODO MAKE THIS HOURS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    /**
+     * @dev Sets timout limit lenght, timout limit starts after waiting period expires,
+     *           after that owner can resolve prediction round, and if timeout is hit users
+     *           can cancel prediction round.
+     *
+     * @param _hours Timout limit lenghts in hours.
+     */
     function setTimoutLimit(uint256 _hours) public {
         TIMEOUT_FOR_RESOLVING_PREDICTION = _hours * 60 * 60;
     }
 
-    function getOpenPeriod() public view returns (uint256){
+    function getOpenPeriod() public view returns (uint256) {
         return OPEN_PERIOD / (60 * 60);
     }
 
-    function getWaitingPeriod() public view returns (uint256){
+    function getWaitingPeriod() public view returns (uint256) {
         return WAITING_PERIOD / (60 * 60);
     }
 
-    function getTimoutForResolvingPrediction() public view returns (uint256){
+    function getTimoutForResolvingPrediction() public view returns (uint256) {
         return TIMEOUT_FOR_RESOLVING_PREDICTION / (60 * 60);
     }
 
-    // Uses 2 decimal places so 1.23 = 1234
-    function setCurrentRoundMinimumPredictionReward(uint256 minimumReward) public {
-        minimumRoundPredictionReward[currentPredictionRound] = minimumReward;
+    /**
+     * @dev Sets minimum prediction reward for next round.
+     *      Reward is applied like so:
+     *      Winning side | Loosing side | Adjusted loosing side
+     *      500          | 10           | 500 (10 + 490)
+     *      1000         | 0            | 1000
+     *      1800         | 500          | 1000 (500 + 500)
+     *
+     *
+     * @param minimumReward Reward in whole amount that is then converted to wei
+     */
+    function setBalanceRoundBonusRewardForNextRound(uint256 minimumReward) public onlyOwner {
+        balanceRoundBonusReward[currentPredictionRound + 1] = minimumReward * (10**predictionCurrency.decimals());
     }
 
+    /**
+     * @dev Gets current predictible options with name up and down amounts in wei
+     *
+     * @return List of MemeOption struts with data on current state of prediction round
+     */
     function getCurrentPredictibleOptions() public view returns (MemeOption[] memory) {
         return roundOptionStats[currentPredictionRound];
     }
 
-    function getCurrentPredictions() public view returns (Predictions memory) {
-        return predictions[currentPredictionRound][msg.sender];
+    /**
+     * @dev Gets users prediction stats for current round
+     *
+     * @param user The address of the user whose predictions we want to fetch.
+     *
+     * @return memeOptionIndexes The indexes of the memes the user has predicted.
+     * @return predictionUpNetAmounts The net amounts (amount - fee) the user has predicted will go up, in wei.
+     * @return predictionDownNetAmounts The net amounts (amount - fee) the user has predicted will go down, in wei.
+     * @return predictionUpAmounts The sums of actual amounts placed by user in wei, where user predicted will go up.
+     * @return predictionDownAmounts The sums of actual amounts placed by user in wei, where user predicted will go down.
+     * @return predictionAmounts The sums of actual amounts placed by user in wei.
+     */
+    function getCurrentPredictions(address user)
+        public
+        view
+        returns (
+            uint256[] memory memeOptionIndexes,
+            uint256[] memory predictionUpNetAmounts,
+            uint256[] memory predictionDownNetAmounts,
+            uint256[] memory predictionUpAmounts,
+            uint256[] memory predictionDownAmounts,
+            uint256[] memory predictionAmounts
+        )
+    {
+        return (
+            predictions[currentPredictionRound][user].memeOptionIndexes,
+            predictions[currentPredictionRound][user].predictionUpNetAmounts,
+            predictions[currentPredictionRound][user].predictionDownNetAmounts,
+            predictions[currentPredictionRound][user].predictionUpAmounts,
+            predictions[currentPredictionRound][user].predictionDownAmounts,
+            predictions[currentPredictionRound][user].predictionAmounts
+        );
     }
 
+    /**
+     * @dev Gets results for current prediction round, note upon starting new round it will
+     *      return empty list. Returns list with results only when round is in resolved state.
+     *
+     * @return List of bools that correspond to each option index (true means up, false means down)
+     */
     function getCurrentRoundResults() public view returns (bool[] memory) {
         return roundResults[currentPredictionRound];
     }
 
-    function getCurrentRoundOdds() public view returns (string memory) {
-        string memory odds;
+    /**
+     * @notice Returns string with odds for prediction index, reward is multiplier of
+     *         prediction amount - fee. Multiplier uses currency decimal places (in example we asume its 2)
+     *         so 123 is 1.23 multiplier. If your prediction amount is 100 fee is 10 and multiplier is 1.5
+     *         then minimum reward is (100 - 10) * 1.5
+     *
+     * @return memeOptionIndexes list of indexes of meme option indexes. It indicates to what other entries point to.
+     * @return upRewardMultipliers list of up rewards multiplers
+     * @return downRewardMultipliers list of up rewards multiplers
+     */
+    function getCurrentRoundOdds()
+        public
+        view
+        returns (
+            uint256[] memory memeOptionIndexes,
+            uint256[] memory upRewardMultipliers,
+            uint256[] memory downRewardMultipliers
+        )
+    {
+        uint256 optionsLength = roundOptionStats[currentPredictionRound].length;
+        memeOptionIndexes = new uint256[](optionsLength);
+        upRewardMultipliers = new uint256[](optionsLength);
+        downRewardMultipliers = new uint256[](optionsLength);
+
         for (uint256 i = 0; i < roundOptionStats[currentPredictionRound].length; i++) {
             uint256 upAmount = roundOptionStats[currentPredictionRound][i].totalUpAmount;
             uint256 downAmount = roundOptionStats[currentPredictionRound][i].totalDownAmount;
-            uint256 totalAmount = upAmount + downAmount;
-            uint256 upReward;
-            uint256 downReward;
+            memeOptionIndexes[i] = i;
             if (upAmount > 0) {
-                upReward = ((totalAmount * 10**ODDS_DECIMALS) / upAmount);
+                uint256 upWinningAmount = _adjustWinningsForBonus(upAmount, downAmount, upAmount, currentPredictionRound);
+                upRewardMultipliers[i] = (upWinningAmount * 10**predictionCurrency.decimals()) / upAmount;
+            } else {
+                upRewardMultipliers[i] = 0;
             }
             if (downAmount > 0) {
-                downReward = ((totalAmount * 10**ODDS_DECIMALS) / downAmount);
+                uint256 downWinningAmount = _adjustWinningsForBonus(downAmount, upAmount, downAmount, currentPredictionRound);
+                upRewardMultipliers[i] = (downWinningAmount * 10**predictionCurrency.decimals()) / downAmount;
+            } else {
+                downRewardMultipliers[i] = 0;
             }
-            odds = string.concat(odds, roundOptionStats[currentPredictionRound][i].identifier);
-            odds = string.concat(odds, "\n\tUp predictions wins reward: ");
-            odds = string.concat(odds, Strings.toString(upReward));
-            odds = string.concat(odds, "\n\tDown predictions wins reward: ");
-            odds = string.concat(odds, Strings.toString(downReward));
-            odds = string.concat(odds, "\n");
         }
-
-        return odds;
     }
 
     function isOpen() public view virtual returns (bool) {
-        return state == State.InProgress && block.timestamp < open_until;
+        return state == State.InProgress && block.timestamp < openUntil;
     }
 
     function isWaitingPeriodOver() public view virtual returns (bool) {
-        return block.timestamp > waiting_until;
+        return block.timestamp > waitingUntil;
     }
 
     function isTimedOut() public view virtual returns (bool) {
-        return block.timestamp > timeout_at;
+        return block.timestamp > timeoutAt;
     }
 
-    function availableFounds() public view returns (uint256) {
+    /**
+     * @dev Funds that are free to withdraw or used for minimum reward payouts.
+     *
+     * @return amount in wei
+     */
+    function availableFunds() public view returns (uint256) {
         return predictionCurrency.balanceOf(address(this)) - lockedCurrency;
     }
 
-    function hasBonusFundsForCurrentRound(bool[] calldata _predictionOutcomes) public view returns (bool) {
-        return calculateCurrentRequriedFundsForGuaranteedWinnings(_predictionOutcomes) <= availableFounds();
+    /**
+     * @dev Used to check contract has enought available funds in contract for resolving current round
+     *      with given prediction outcomes.
+     *
+     * @param predictionOutcomes list of bools that would be used for resolving current prediction round
+     * @return bool
+     */
+    function hasBonusFundsForCurrentRound(bool[] calldata predictionOutcomes) public view returns (bool) {
+        return calculateCurrentRequriedFundsForGuaranteedWinnings(predictionOutcomes) <= availableFunds();
     }
 
-    function calculateCurrentRequriedFundsForGuaranteedWinnings(bool[] calldata _predictionOutcomes)
+    /**
+     * @dev Used to check how much funds are needed to be available in contract for resolving current round
+     *      with given prediction outcomes. Required funds are used to payout minimum reward bonus.
+     *
+     * @param predictionOutcomes list of bools that would be used for resolving current prediction round
+     * @return Amount needed in wei
+     */
+    function calculateCurrentRequriedFundsForGuaranteedWinnings(bool[] calldata predictionOutcomes)
         public
         view
         returns (uint256)
     {
         require(
-            _predictionOutcomes.length == roundOptionStats[currentPredictionRound].length,
+            predictionOutcomes.length == roundOptionStats[currentPredictionRound].length,
             "ERROR: Outcomes needs to have same amount of elements as prediction options"
         );
 
@@ -195,11 +320,11 @@ contract MemePredictionBase is Ownable, ArraySearch {
             uint256 winning_amount;
             uint256 loosing_amount;
 
-            if (_predictionOutcomes[i]) {
+            if (predictionOutcomes[i]) {
                 winning_amount = upAmount;
                 loosing_amount = downAmount;
             }
-            if (!_predictionOutcomes[i]) {
+            if (!predictionOutcomes[i]) {
                 winning_amount = downAmount;
                 loosing_amount = upAmount;
             }
@@ -218,31 +343,67 @@ contract MemePredictionBase is Ownable, ArraySearch {
     }
 
     /**
-    * @dev Copies round options from current round to next one, 
-    *      if stats for next round were not set by setPredictibleOptionsForNextRound.
-    */
+     * @notice Calculates amount that can be claimed
+     *
+     * @param user address of user used for calculation of claimable amount
+     * @return claimableAmount amount in wei that can be claimed
+     */
+    function calculateClaimableAmount(address user) public view returns (uint256) {
+        uint256 claimableAmount = 0;
+        uint256[] memory unclaimedRounds = unclaimedPredictionRounds[user];
+        for (uint256 i = 0; i < unclaimedRounds.length; i++) {
+            uint256 unclaimedRound = unclaimedRounds[i];
+            if (unclaimedRound == currentPredictionRound && state == State.InProgress) {
+                continue;
+            }
+            uint256 roundClaimableAmount;
+            if (roundResults[unclaimedRound].length == 0) {
+                roundClaimableAmount = _calculateRefundForCancelledRound(unclaimedRound, user);
+            } else {
+                roundClaimableAmount = _calculateRewardForRound(unclaimedRound, user);
+            }
+            claimableAmount += roundClaimableAmount;
+        }
+        return claimableAmount;
+    }
+
+    /**
+     * @dev Copies round options from current round to next one,
+     *      if stats for next round were not set by setPredictibleOptionsForNextRound.
+     */
     function _copyRoundOptionStatsForNextRound() internal {
-        if (roundOptionStats[currentPredictionRound + 1].length != 0){
+        if (roundOptionStats[currentPredictionRound + 1].length != 0) {
             return;
         }
-        
+
         for (uint256 i = 0; i < roundOptionStats[currentPredictionRound].length; i++) {
             string memory memeIdentifier = roundOptionStats[currentPredictionRound][i].identifier;
-            roundOptionStats[currentPredictionRound + 1].push(MemeOption(memeIdentifier, 0, 0));
+            roundOptionStats[currentPredictionRound + 1].push(MemeOption(memeIdentifier, i, 0, 0, 0));
         }
     }
 
-    function _calculateRefundForCancelledRound(uint256 round) internal view returns (uint256 amount) {
+    /**
+     * @dev Copies balanceRoundBonusReward from current round to next one,
+     *      if bonus for next round was not set by setPredictibleOptionsForNextRound.
+     */
+    function _copybalanceRoundBonusRewardForNextRound() internal {
+        if (balanceRoundBonusReward[currentPredictionRound + 1] != 0) {
+            return;
+        }
+        balanceRoundBonusReward[currentPredictionRound + 1] = balanceRoundBonusReward[currentPredictionRound];
+    }
+
+    function _calculateRefundForCancelledRound(uint256 round, address user) internal view returns (uint256 amount) {
         amount = 0;
-        Predictions memory roundPredictions = predictions[round][msg.sender];
+        Predictions memory roundPredictions = predictions[round][user];
         for (uint256 i = 0; i < roundPredictions.predictionNetAmounts.length; i++) {
             amount += roundPredictions.predictionNetAmounts[i];
         }
         amount += roundPredictions.feesCollected;
     }
 
-    function _calculateRewardForRound(uint256 round) internal view returns (uint256 amount) {
-        Predictions memory roundPredictions = predictions[round][msg.sender];
+    function _calculateRewardForRound(uint256 round, address user) internal view returns (uint256 amount) {
+        Predictions memory roundPredictions = predictions[round][user];
         for (uint256 i = 0; i < roundPredictions.memeOptionIndexes.length; i++) {
             uint256 memeIndex = roundPredictions.memeOptionIndexes[i];
 
@@ -271,13 +432,14 @@ contract MemePredictionBase is Ownable, ArraySearch {
         uint256 predictionAmount,
         uint256 round
     ) internal view returns (uint256) {
-        uint256 totalPredictionAmount = totalWinningAmount + totalLosingAmount;
-        uint256 baseReward = (predictionAmount * totalPredictionAmount) / totalWinningAmount;
-        uint256 minimumReward = (predictionAmount * minimumRoundPredictionReward[round]) / 10**ODDS_DECIMALS;
-        if (baseReward > minimumReward) {
-            return baseReward;
+        uint256 usedBonusReward = 0;
+        if (totalWinningAmount > totalLosingAmount) {
+            uint256 diff = totalWinningAmount - totalLosingAmount;
+            usedBonusReward = min(diff, balanceRoundBonusReward[round]);
         }
-        return minimumReward;
+        uint256 totalPredictionAmount = totalWinningAmount + totalLosingAmount + usedBonusReward;
+        uint256 reward = (predictionAmount * totalPredictionAmount) / totalWinningAmount;
+        return reward;
     }
 
     function _addNewPrediction(
@@ -291,10 +453,15 @@ contract MemePredictionBase is Ownable, ArraySearch {
 
         if (isUpPrediction) {
             predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts.push(weiNetAmount);
+            predictions[currentPredictionRound][msg.sender].predictionUpAmounts.push(weiAmount);
             predictions[currentPredictionRound][msg.sender].predictionDownNetAmounts.push(0);
+            predictions[currentPredictionRound][msg.sender].predictionDownAmounts.push(0);
         } else {
-            predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts.push(0);
             predictions[currentPredictionRound][msg.sender].predictionDownNetAmounts.push(weiNetAmount);
+            predictions[currentPredictionRound][msg.sender].predictionDownAmounts.push(weiAmount);
+            predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts.push(0);
+            predictions[currentPredictionRound][msg.sender].predictionUpAmounts.push(0);
+            
         }
         predictions[currentPredictionRound][msg.sender].predictionNetAmounts.push(weiNetAmount);
         predictions[currentPredictionRound][msg.sender].predictionAmounts.push(weiAmount);
@@ -317,8 +484,10 @@ contract MemePredictionBase is Ownable, ArraySearch {
     ) internal {
         if (isUpPrediction) {
             predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts[index] += weiNetAmount;
+            predictions[currentPredictionRound][msg.sender].predictionUpAmounts[index] += weiAmount;
         } else {
             predictions[currentPredictionRound][msg.sender].predictionDownNetAmounts[index] += weiNetAmount;
+            predictions[currentPredictionRound][msg.sender].predictionDownAmounts[index] += weiAmount;
         }
         predictions[currentPredictionRound][msg.sender].predictionNetAmounts[index] += weiNetAmount;
         predictions[currentPredictionRound][msg.sender].predictionAmounts[index] += weiAmount;
@@ -346,6 +515,12 @@ contract MemePredictionBase is Ownable, ArraySearch {
         userPredictions.predictionNetAmounts[predictionIndex] = 0;
         userPredictions.predictionUpNetAmounts[predictionIndex] = 0;
         userPredictions.predictionDownNetAmounts[predictionIndex] = 0;
+        userPredictions.predictionUpAmounts[predictionIndex] = 0;
+        userPredictions.predictionDownAmounts[predictionIndex] = 0;
         userPredictions.predictionAmounts[predictionIndex] = 0;
+    }
+
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a <= b ? a : b;
     }
 }
