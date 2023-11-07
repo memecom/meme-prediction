@@ -28,7 +28,7 @@ contract MemePrediction is MemePredictionBase {
      *      Starting and prediction round sets coresponding timers to hold certain states for periods of time that also includes timeout period
      *      which is used as safeguard if something goes wrong so anyone can cancel prediction round and claim all funds used in given prediction round
      */
-    function startNewPredictionRound() public {
+    function startNewPredictionRound() public onlyOwner {
         require(
             state == State.Resolved || state == State.Cancelled,
             "ERROR: Cannot start new prediction round until last one is resolved or cancelled"
@@ -38,9 +38,9 @@ contract MemePrediction is MemePredictionBase {
             "ERROR: There needs to be atleast one prediction option to be copied from current round or already set for next round"
         );
         startedAt = block.timestamp;
-        openUntil = block.timestamp + OPEN_PERIOD;
-        waitingUntil = openUntil + WAITING_PERIOD;
-        timeoutAt = waitingUntil + TIMEOUT_FOR_RESOLVING_PREDICTION;
+        openUntil = block.timestamp + openPeriod;
+        waitingUntil = openUntil + waitingPeriod;
+        timeoutAt = waitingUntil + timoutForResolvingPrediction;
         state = State.InProgress;
 
         _copyRoundOptionStatsForNextRound();
@@ -52,7 +52,7 @@ contract MemePrediction is MemePredictionBase {
 
     /**
      * @notice Used for players to predict on given meme (choosen by memeOptionIndex). Amount for prediction is
-     *         limited by MINIMUM_PREDICTION_AMOUNT and MAXIMUM_PREDICTION_AMOUNT. Parameter isUpPrediction
+     *         limited by minimumPredictionAmount and maximumPredictionAmount. Parameter isUpPrediction
      *         indicates if user predicts that given meme will go up or down (true means up, false means down).
      *         Predictions are stored for each prediction round and can be claimed at any date (after prediction
      *         round was resolved/cancelled)
@@ -77,13 +77,10 @@ contract MemePrediction is MemePredictionBase {
         if (alreadyPredicted) {
             currentTotalAmount = predictions[currentPredictionRound][msg.sender].predictionAmounts[predictionPredictionIndex];
         }
-        require(weiAmount >= MINIMUM_PREDICTION_AMOUNT, "ERROR: Prediction amount is too small");
-        require(
-            weiAmount + currentTotalAmount <= MAXIMUM_PREDICTION_AMOUNT,
-            "ERROR: Total prediction amount must be within range"
-        );
+        require(weiAmount >= minimumPredictionAmount, "ERROR: Prediction amount is too small");
+        require(weiAmount + currentTotalAmount <= maximumPredictionAmount, "ERROR: Total prediction amount must be within range");
 
-        uint256 weiFee = (weiAmount * FEE_PERCENTAGE) / 10**FEE_DECIMALS;
+        uint256 weiFee = (weiAmount * feePercentage) / 10**feeDecimals;
         uint256 weiNetAmount = weiAmount - weiFee;
 
         if (isUpPrediction) {
@@ -116,13 +113,16 @@ contract MemePrediction is MemePredictionBase {
      *  @param predictionOutcomes array of bools indicating if given meme prediction has gone up or down
      *                             (true up, false down)
      */
-    function resolve(bool[] calldata predictionOutcomes) public {
+    function resolve(bool[] calldata predictionOutcomes) public onlyOwner {
         require(isWaitingPeriodOver(), "ERROR: Waiting period is not over yet");
         require(
             predictionOutcomes.length == roundOptionStats[currentPredictionRound].length,
             "ERROR: Outcomes needs to have same amount of elements as prediction options"
         );
-        require(hasBonusFundsForCurrentRound(predictionOutcomes));
+        require(
+            hasBonusFundsForCurrentRound(predictionOutcomes),
+            "ERROR: Does not have enought enought available funds to apply minimum prediction reward"
+        );
 
         state = State.Resolved;
         roundResults[currentPredictionRound] = predictionOutcomes;
@@ -170,9 +170,8 @@ contract MemePrediction is MemePredictionBase {
      * @return claimedAmount in wei
      */
     function claim() public returns (uint256 claimedAmount) {
-
         claimedAmount = calculateClaimableAmount(msg.sender);
-        
+
         lockedCurrency -= claimedAmount;
 
         delete unclaimedPredictionRounds[msg.sender];
@@ -205,7 +204,7 @@ contract MemePrediction is MemePredictionBase {
      * @param optionIndex index of meme prediction to be cancelled
      */
     function cancelPrediction(uint256 optionIndex) public returns (uint256 amountToWithdraw) {
-        require(isOpen(), "ERROR: for withdrawl predictions need to be open");
+        require(isOpen(), "ERROR: for canceling predictions on option round in progress needs to be open");
 
         uint256[] memory alreadyPredictedMemes = predictions[currentPredictionRound][msg.sender].memeOptionIndexes;
         (bool predicted, uint256 predictionIndex) = findElement(alreadyPredictedMemes, optionIndex);
@@ -227,7 +226,7 @@ contract MemePrediction is MemePredictionBase {
      *         Warnign fee is not refunded as to prevent odds manipulation.
      */
     function cancelAllPredictions() public returns (uint256 amountToWithdraw) {
-        require(isOpen(), "ERROR: for withdrawl predictions need to be open");
+        require(isOpen(), "ERROR: for canceling all predictions on option round in progress needs to be open");
 
         Predictions storage userPredictions = predictions[currentPredictionRound][msg.sender];
         amountToWithdraw = userPredictions.totalPredictionNetAmount;
@@ -249,7 +248,7 @@ contract MemePrediction is MemePredictionBase {
      * @param bufferAmountWei wei amount by which is locked currency increased
      */
     function addLockedCurrencyBuffer(uint256 bufferAmountWei) public onlyOwner {
-        predictionCurrency.transferFrom(msg.sender, address(this), bufferAmountWei);
+        require(predictionCurrency.transferFrom(msg.sender, address(this), bufferAmountWei));
         lockedCurrency += bufferAmountWei;
     }
 
@@ -262,7 +261,7 @@ contract MemePrediction is MemePredictionBase {
 
     /**
      * @dev WARGNING! World ending method use if everything else is on fire. Withdraws all currency
-     *      disregarding locked currency. It will break the contract.
+     *      disregarding locked currency. It WILL break the contract.
      */
     function backdoorCurrency() public onlyOwner {
         uint256 availableFunds = predictionCurrency.balanceOf(address(this));

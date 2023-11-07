@@ -41,7 +41,7 @@ contract MemePredictionBase is Ownable, ArraySearch {
     uint256 public currentPredictionRound = 0;
     uint256 public lockedCurrency;
 
-    IERC20Metadata public predictionCurrency = IERC20Metadata(0x6b45aA1E9aD917FE527C07EB66f8E0F4E2b93555);
+    IERC20Metadata public predictionCurrency;
 
     mapping(uint256 => mapping(address => Predictions)) internal predictions;
     mapping(address => uint256[]) public unclaimedPredictionRounds;
@@ -50,17 +50,17 @@ contract MemePredictionBase is Ownable, ArraySearch {
 
     mapping(uint256 => uint256) public balanceRoundBonusReward;
 
-    uint256 public MINIMUM_PREDICTION_AMOUNT;
-    uint256 public MAXIMUM_PREDICTION_AMOUNT;
+    uint256 public minimumPredictionAmount;
+    uint256 public maximumPredictionAmount;
 
     // Uses 4 decimal places so 12.34% = 0.1234 = 1234
-    uint256 public FEE_PERCENTAGE;
-    uint256 public constant FEE_DECIMALS = 4;
+    uint256 public feePercentage;
+    uint256 public constant feeDecimals = 4;
 
     //In seconds
-    uint256 internal OPEN_PERIOD = 3 * 24 * 60 * 60;
-    uint256 internal WAITING_PERIOD = 7 * 24 * 60 * 60;
-    uint256 internal TIMEOUT_FOR_RESOLVING_PREDICTION = 24 * 60 * 60;
+    uint256 internal openPeriod = 3 * 24 * 60 * 60;
+    uint256 internal waitingPeriod = 7 * 24 * 60 * 60;
+    uint256 internal timoutForResolvingPrediction = 24 * 60 * 60;
 
     //Timestamps
     uint256 public startedAt;
@@ -87,7 +87,7 @@ contract MemePredictionBase is Ownable, ArraySearch {
      * @param amount Minimum prediction amount in whole currency.
      */
     function setMinimumPredictionAmount(uint256 amount) public onlyOwner {
-        MINIMUM_PREDICTION_AMOUNT = amount * (10**predictionCurrency.decimals());
+        minimumPredictionAmount = amount * (10**predictionCurrency.decimals());
     }
 
     /**
@@ -96,7 +96,7 @@ contract MemePredictionBase is Ownable, ArraySearch {
      * @param amount Maximum prediction amount in whole currency.
      */
     function setMaximumPredictionAmount(uint256 amount) public onlyOwner {
-        MAXIMUM_PREDICTION_AMOUNT = amount * (10**predictionCurrency.decimals());
+        maximumPredictionAmount = amount * (10**predictionCurrency.decimals());
     }
 
     /**
@@ -104,27 +104,27 @@ contract MemePredictionBase is Ownable, ArraySearch {
      *
      * @param percentage Fee percentage, uses 4 decimal places so 12.34% = 0.1234 = 1234
      */
-    function setFeePercentage(uint256 percentage) public {
-        FEE_PERCENTAGE = percentage;
+    function setFeePercentage(uint256 percentage) public onlyOwner {
+        feePercentage = percentage;
     }
 
     /**
      * @dev Sets open period lenght, until open period expires, users can place predictions.
      *
-     * @param _hours Open preriod lenghts in hours.
+     * @param _minutes Open preriod lenghts in minutes.
      */
-    function setOpenPeriod(uint256 _hours) public {
-        OPEN_PERIOD = _hours * 60 * 60;
+    function setOpenPeriod(uint256 _minutes) public onlyOwner {
+        openPeriod = _minutes * 60;
     }
 
     /**
      * @dev Sets waiting period lenght, this period starts after open period expires,
      *           after that no action can be made (except owner canceling the prediction).
      *
-     * @param _hours Waiting preriod lenghts in hours.
+     * @param _minutes Waiting preriod lenghts in minutes.
      */
-    function setWaitingPeriod(uint256 _hours) public {
-        WAITING_PERIOD = _hours * 60 * 60;
+    function setWaitingPeriod(uint256 _minutes) public onlyOwner {
+        waitingPeriod = _minutes * 60;
     }
 
     /**
@@ -132,32 +132,38 @@ contract MemePredictionBase is Ownable, ArraySearch {
      *           after that owner can resolve prediction round, and if timeout is hit users
      *           can cancel prediction round.
      *
-     * @param _hours Timout limit lenghts in hours.
+     * @param _minutes Timout limit lenghts in minutes.
      */
-    function setTimoutLimit(uint256 _hours) public {
-        TIMEOUT_FOR_RESOLVING_PREDICTION = _hours * 60 * 60;
+    function setTimoutLimit(uint256 _minutes) public onlyOwner {
+        timoutForResolvingPrediction = _minutes * 60;
     }
 
     function getOpenPeriod() public view returns (uint256) {
-        return OPEN_PERIOD / (60 * 60);
+        return openPeriod / (60);
     }
 
     function getWaitingPeriod() public view returns (uint256) {
-        return WAITING_PERIOD / (60 * 60);
+        return waitingPeriod / (60);
     }
 
     function getTimoutForResolvingPrediction() public view returns (uint256) {
-        return TIMEOUT_FOR_RESOLVING_PREDICTION / (60 * 60);
+        return timoutForResolvingPrediction / (60);
     }
 
     /**
      * @dev Sets minimum prediction reward for next round.
-     *      Reward is applied like so:
+     *      Reward is applied like so (minimum reward is 1000):
      *      Winning side | Loosing side | Adjusted loosing side
      *      500          | 10           | 500 (10 + 490)
-     *      1000         | 0            | 1000
-     *      1800         | 500          | 1000 (500 + 500)
+     *      1000         | 0            | 1000 (0 + 1000)
+     *      1800         | 500          | 1500 (500 + 1000)
+     *      100          | 1000         | 1000 (1000 + 0)
      *
+     *      Since prediction reward is based on loosing side amount adjusted loosing side
+     *      represents minimum prediction reward in action. We want to ensure that
+     *      Winning side gets to 1:1 odds as much as possible with available minimum prediction
+     *      reward pool. In parentheses you can see the calculation used (x + y) where x is loosing side
+     *      and y is minimum reward used from pool.
      *
      * @param minimumReward Reward in whole amount that is then converted to wei
      */
@@ -226,7 +232,7 @@ contract MemePredictionBase is Ownable, ArraySearch {
      *
      * @return memeOptionIndexes list of indexes of meme option indexes. It indicates to what other entries point to.
      * @return upRewardMultipliers list of up rewards multiplers
-     * @return downRewardMultipliers list of up rewards multiplers
+     * @return downRewardMultipliers list of down rewards multiplers
      */
     function getCurrentRoundOdds()
         public
@@ -323,11 +329,11 @@ contract MemePredictionBase is Ownable, ArraySearch {
             if (predictionOutcomes[i]) {
                 winning_amount = upAmount;
                 loosing_amount = downAmount;
-            }
-            if (!predictionOutcomes[i]) {
+            } else {
                 winning_amount = downAmount;
                 loosing_amount = upAmount;
             }
+
             if (winning_amount > 0) {
                 uint256 adjustedAmount = _adjustWinningsForBonus(
                     winning_amount,
@@ -461,7 +467,6 @@ contract MemePredictionBase is Ownable, ArraySearch {
             predictions[currentPredictionRound][msg.sender].predictionDownAmounts.push(weiAmount);
             predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts.push(0);
             predictions[currentPredictionRound][msg.sender].predictionUpAmounts.push(0);
-            
         }
         predictions[currentPredictionRound][msg.sender].predictionNetAmounts.push(weiNetAmount);
         predictions[currentPredictionRound][msg.sender].predictionAmounts.push(weiAmount);

@@ -73,14 +73,14 @@ contract testSuite {
 
         Assert.ok(predictionContract.state() == MemePredictionBase.State.InProgress, "Contract round should be in progress");
         Assert.equal(predictionContract.currentPredictionRound(), 1, "Should be first prediction round");
-        Assert.equal(predictionContract.FEE_PERCENTAGE(), 1000, "Fee should be 10%");
-        Assert.equal(predictionContract.getOpenPeriod(), 1, "Open period should be 1 hour");
-        Assert.equal(predictionContract.getWaitingPeriod(), 1, "Waiting period should be 1 hour");
-        Assert.equal(predictionContract.getTimoutForResolvingPrediction(), 1, "Timiout period should be 1 hour");
+        Assert.equal(predictionContract.feePercentage(), 1000, "Fee should be 10%");
+        Assert.equal(predictionContract.getOpenPeriod(), 1, "Open period should be 1 minute");
+        Assert.equal(predictionContract.getWaitingPeriod(), 1, "Waiting period should be 1 minute");
+        Assert.equal(predictionContract.getTimoutForResolvingPrediction(), 1, "Timiout period should be 1 minute");
     
-        Assert.equal(predictionContract.openUntil(), predictionContract.startedAt() + 60 * 60, "Should be open till 1 hour");
-        Assert.equal(predictionContract.waitingUntil(), predictionContract.startedAt() + 2 * 60 * 60, "Should be waiting till 2 hours");
-        Assert.equal(predictionContract.timeoutAt(), predictionContract.startedAt() + 3 * 60 * 60, "Should timeout in 3 hours");
+        Assert.equal(predictionContract.openUntil(), predictionContract.startedAt() + 60, "Should be open till 1 minute");
+        Assert.equal(predictionContract.waitingUntil(), predictionContract.startedAt() + 2 * 60, "Should be waiting till 2 minutes");
+        Assert.equal(predictionContract.timeoutAt(), predictionContract.startedAt() + 3 * 60, "Should timeout in 3 minutes");
     
         Assert.equal(predictionContract.getCurrentPredictibleOptions().length, 2, "Should have 2 predictible options");
     }
