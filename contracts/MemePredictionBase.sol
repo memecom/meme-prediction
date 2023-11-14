@@ -251,6 +251,7 @@ contract MemePredictionBase is Ownable, ArraySearch {
         for (uint256 i = 0; i < roundOptionStats[currentPredictionRound].length; i++) {
             uint256 upAmount = roundOptionStats[currentPredictionRound][i].totalUpAmount;
             uint256 downAmount = roundOptionStats[currentPredictionRound][i].totalDownAmount;
+            
             memeOptionIndexes[i] = i;
             if (upAmount > 0) {
                 uint256 upWinningAmount = _adjustWinningsForBonus(upAmount, downAmount, upAmount, currentPredictionRound);
@@ -260,7 +261,7 @@ contract MemePredictionBase is Ownable, ArraySearch {
             }
             if (downAmount > 0) {
                 uint256 downWinningAmount = _adjustWinningsForBonus(downAmount, upAmount, downAmount, currentPredictionRound);
-                upRewardMultipliers[i] = (downWinningAmount * 10**predictionCurrency.decimals()) / downAmount;
+                downRewardMultipliers[i] = (downWinningAmount * 10**predictionCurrency.decimals()) / downAmount;
             } else {
                 downRewardMultipliers[i] = 0;
             }
@@ -438,91 +439,23 @@ contract MemePredictionBase is Ownable, ArraySearch {
         uint256 predictionAmount,
         uint256 round
     ) internal view returns (uint256) {
-        uint256 usedBonusReward = 0;
-        if (totalWinningAmount > totalLosingAmount) {
-            uint256 diff = totalWinningAmount - totalLosingAmount;
-            usedBonusReward = min(diff, balanceRoundBonusReward[round]);
-        }
+        uint256 usedBonusReward = _calculateBonus(totalWinningAmount, totalLosingAmount, round);
         uint256 totalPredictionAmount = totalWinningAmount + totalLosingAmount + usedBonusReward;
         uint256 reward = (predictionAmount * totalPredictionAmount) / totalWinningAmount;
         return reward;
     }
 
-    function _addNewPrediction(
-        uint256 memeOptionIndex,
-        uint256 weiAmount,
-        uint256 weiNetAmount,
-        uint256 weiFee,
-        bool isUpPrediction
-    ) internal {
-        predictions[currentPredictionRound][msg.sender].memeOptionIndexes.push(memeOptionIndex);
-
-        if (isUpPrediction) {
-            predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts.push(weiNetAmount);
-            predictions[currentPredictionRound][msg.sender].predictionUpAmounts.push(weiAmount);
-            predictions[currentPredictionRound][msg.sender].predictionDownNetAmounts.push(0);
-            predictions[currentPredictionRound][msg.sender].predictionDownAmounts.push(0);
-        } else {
-            predictions[currentPredictionRound][msg.sender].predictionDownNetAmounts.push(weiNetAmount);
-            predictions[currentPredictionRound][msg.sender].predictionDownAmounts.push(weiAmount);
-            predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts.push(0);
-            predictions[currentPredictionRound][msg.sender].predictionUpAmounts.push(0);
+    function _calculateBonus(
+        uint256 totalWinningAmount,
+        uint256 totalLosingAmount,
+        uint256 round
+    ) internal view returns (uint256) {
+        uint256 usedBonusReward = 0;
+        if (totalWinningAmount > totalLosingAmount) {
+            uint256 diff = totalWinningAmount - totalLosingAmount;
+            usedBonusReward = min(diff, balanceRoundBonusReward[round]);
         }
-        predictions[currentPredictionRound][msg.sender].predictionNetAmounts.push(weiNetAmount);
-        predictions[currentPredictionRound][msg.sender].predictionAmounts.push(weiAmount);
-
-        predictions[currentPredictionRound][msg.sender].totalPredictionNetAmount += weiNetAmount;
-        predictions[currentPredictionRound][msg.sender].totalPredictionAmount += weiAmount;
-
-        predictions[currentPredictionRound][msg.sender].feesCollected += weiFee;
-        feesCollectedForRound[currentPredictionRound] += weiFee;
-        lockedCurrency += weiFee;
-        lockedCurrency += weiNetAmount;
-    }
-
-    function _addToExistingPrediction(
-        uint256 index,
-        uint256 weiAmount,
-        uint256 weiNetAmount,
-        uint256 weiFee,
-        bool isUpPrediction
-    ) internal {
-        if (isUpPrediction) {
-            predictions[currentPredictionRound][msg.sender].predictionUpNetAmounts[index] += weiNetAmount;
-            predictions[currentPredictionRound][msg.sender].predictionUpAmounts[index] += weiAmount;
-        } else {
-            predictions[currentPredictionRound][msg.sender].predictionDownNetAmounts[index] += weiNetAmount;
-            predictions[currentPredictionRound][msg.sender].predictionDownAmounts[index] += weiAmount;
-        }
-        predictions[currentPredictionRound][msg.sender].predictionNetAmounts[index] += weiNetAmount;
-        predictions[currentPredictionRound][msg.sender].predictionAmounts[index] += weiAmount;
-
-        predictions[currentPredictionRound][msg.sender].totalPredictionNetAmount += weiNetAmount;
-        predictions[currentPredictionRound][msg.sender].totalPredictionAmount += weiAmount;
-
-        predictions[currentPredictionRound][msg.sender].feesCollected += weiFee;
-        feesCollectedForRound[currentPredictionRound] += weiFee;
-        lockedCurrency += weiFee;
-        lockedCurrency += weiNetAmount;
-    }
-
-    function _storeWithdrawal(uint256 predictionIndex, uint256 optionIndex) internal {
-        Predictions storage userPredictions = predictions[currentPredictionRound][msg.sender];
-        uint256 upNetAmount = userPredictions.predictionUpNetAmounts[predictionIndex];
-        uint256 downNetAmount = userPredictions.predictionDownNetAmounts[predictionIndex];
-
-        roundOptionStats[currentPredictionRound][optionIndex].totalUpAmount -= upNetAmount;
-        roundOptionStats[currentPredictionRound][optionIndex].totalDownAmount -= downNetAmount;
-
-        userPredictions.totalPredictionAmount -= userPredictions.predictionAmounts[predictionIndex];
-        userPredictions.totalPredictionNetAmount -= userPredictions.predictionNetAmounts[predictionIndex];
-
-        userPredictions.predictionNetAmounts[predictionIndex] = 0;
-        userPredictions.predictionUpNetAmounts[predictionIndex] = 0;
-        userPredictions.predictionDownNetAmounts[predictionIndex] = 0;
-        userPredictions.predictionUpAmounts[predictionIndex] = 0;
-        userPredictions.predictionDownAmounts[predictionIndex] = 0;
-        userPredictions.predictionAmounts[predictionIndex] = 0;
+        return usedBonusReward;
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
